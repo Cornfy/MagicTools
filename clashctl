@@ -1,0 +1,404 @@
+#!/bin/bash
+
+CLASH_BIN="/usr/local/bin/mihomo"
+CLASH_ETC="/etc/mihomo"
+CLASH_CONFIG="${CLASH_ETC}/config.yaml"
+CLASH_LOG="${CLASH_ETC}/clash.log"
+CLASH_API="http://127.0.0.1:9090"
+
+GEOIP_FILE="${CLASH_ETC}/GeoIP.dat"
+GEOSITE_FILE="${CLASH_ETC}/GeoSite.dat"
+
+GEOIP_URL="https://cdn.jsdelivr.net/gh/Cornfy/geoip@release/geoip-asn.dat"
+GEOSITE_URL="https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
+
+# Function to handle errors and exit
+handleError()
+{
+    echo "Error: $1"
+    exit 1
+}
+
+# Function to detect system information
+detectSystemInfo() {
+    # Get the system name and architecture
+    local UNAME_S=$(uname -s)
+    local UNAME_M=$(uname -m)
+
+    case "$UNAME_S" in
+        Linux)
+            SYSTEM=$( [ -f "/system/bin/getprop" ] && echo "android" || echo "linux" )
+            ;;
+        *)
+            handleError "Unsupported system: $UNAME_S"
+            ;;
+    esac
+
+    case "$SYSTEM" in
+        android)
+            AARCH=$( [ "$UNAME_M" = "armv7l" ] && echo "armv7" || echo "arm64-v8" )
+            ;;
+        linux)
+            AARCH=$( [ "$UNAME_M" = "x86_64" ] && echo "amd64-compatible" || echo "386" )
+            ;;
+        *)
+            handleError "Unsupported architecture: $UNAME_M"
+            ;;
+    esac
+}
+
+installClash() {
+    # Get system information
+    detectSystemInfo
+
+    # Construct the binary file path based on system info
+    local BINARY_FILE="./bin/mihomo-$SYSTEM-$AARCH"
+
+    # Check if the binary file exists
+    if [ -f "$BINARY_FILE" ]; then
+        echo "Installing the kernel binary to [$CLASH_BIN]..."
+        if [ ! -f "$CLASH_BIN" ]; then
+            cp "$BINARY_FILE" "$CLASH_BIN" || handleError "Failed to copy binary."
+            chmod +x "$CLASH_BIN"
+            echo "Installation completed."
+        else
+            echo "Kernel binary already exists."
+        fi
+    else
+        handleError "Binary file not found: $BINARY_FILE"
+    fi
+
+    # Create configuration directory if needed
+    [ -d "./etc" ] && \
+    {
+        echo "Creating the kernel data dir to [$CLASH_ETC]..."
+        mkdir -p "$CLASH_ETC"
+
+        echo "Copying etc files to [$CLASH_ETC]..."
+        cp -r "./etc/." "${CLASH_ETC}/"
+        echo "Copy completed."
+    }
+
+    echo "Writing a yaml config..."
+    writeConfigYaml
+
+    echo "Setting autostart for systemd service..."
+    createAutostartService
+
+    echo "ALL DONE."
+    $0 -h
+}
+
+startClash()
+{
+    pidof "$CLASH_BIN" > /dev/null && \
+    { 
+        echo "Clash is already running."
+        return
+    }
+
+    "$CLASH_BIN" -d "$CLASH_ETC" -t -f "$CLASH_CONFIG" || handleError "Invalid config file."
+
+    nohup "$CLASH_BIN" -d "$CLASH_ETC" > "$CLASH_LOG" 2>&1 &
+    echo "Clash STARTED."
+}
+
+reloadConfig()
+{
+    local CLASH_API="http://127.0.0.1:9090"
+    local response=$(curl -X PUT -s -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" -d "{\"path\": \"$CLASH_CONFIG\"}" "${CLASH_API}/configs")
+
+    case "$response" in
+        200|204) echo "Config reloaded." ;;
+        *) handleError "Failed to reload config. HTTP response code: $response" ;;
+    esac
+}
+
+killClash()
+{
+    pidof "$CLASH_BIN" > /dev/null && \
+    {
+        pkill -f "$CLASH_BIN"
+        cat /dev/null > "$CLASH_LOG"
+        echo "Clash STOPPED."
+    } || echo "Clash is not running."
+}
+
+showClashLogs()
+{
+    cat "$CLASH_LOG"
+}
+
+updateClashKernel()
+{
+    # Get system information
+    detectSystemInfo
+
+    # Get the latest version
+    local LATEST=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | grep '"tag_name":' | cut -d '"' -f 4)
+    local URL="https://github.com/MetaCubeX/mihomo/releases/download/$LATEST/mihomo-$SYSTEM-$AARCH-$LATEST.gz"
+    
+    # Debugging info
+    echo "System: $SYSTEM"
+    echo "Architecture: $AARCH"
+    echo "Latest version: $LATEST"
+    echo "Download URL: $URL"
+
+    # Ensure the temporary directory exists
+    mkdir -p "${CLASH_ETC}/tmp"
+
+    # Download the latest kernel
+    curl -L "$URL" -o "${CLASH_ETC}/tmp/mihomo-$SYSTEM-$AARCH-$LATEST.gz" || handleError "Failed to download Clash kernel."
+
+    # Decompress the downloaded file
+    gzip -d -c "${CLASH_ETC}/tmp/mihomo-$SYSTEM-$AARCH-$LATEST.gz" > "${CLASH_ETC}/tmp/mihomo-$SYSTEM-$AARCH-$LATEST" || handleError "Failed to decompress the downloaded file."
+
+    # Replace the old kernel
+    mv "${CLASH_ETC}/tmp/mihomo-$SYSTEM-$AARCH-$LATEST" "$CLASH_BIN" || handleError "Failed to replace the old kernel."
+    chmod +x "$CLASH_BIN" || handleError "Failed to make the new kernel executable."
+
+    # Clean up old .gz files, keeping the latest one
+    find "${CLASH_ETC}/tmp" -type f -name "mihomo-$SYSTEM-$AARCH-*.gz" ! -name "mihomo-$SYSTEM-$AARCH-$LATEST.gz" -delete
+
+    echo "Clash kernel updated to $LATEST and will be used when restarted."
+}
+
+updateGeoX() 
+{
+    # Ensure the tmp directory exists
+    mkdir -p "${CLASH_ETC}/tmp"
+
+    # Temporary file paths
+    local TMP_GEOIP_FILE="${CLASH_ETC}/tmp/GeoIP.dat"
+    local TMP_GEOSITE_FILE="${CLASH_ETC}/tmp/GeoSite.dat"
+
+    # Download the latest GeoIP.dat to a temporary file
+    echo "Downloading GeoIP.dat..."
+    curl -L "$GEOIP_URL" -o "$TMP_GEOIP_FILE" && [ -s "$TMP_GEOIP_FILE" ] || handleError "Failed to download or verify GeoIP.dat."
+
+    # Download the latest GeoSite.dat to a temporary file
+    echo "Downloading GeoSite.dat..."
+    curl -L "$GEOSITE_URL" -o "$TMP_GEOSITE_FILE" && [ -s "$TMP_GEOSITE_FILE" ] || handleError "Failed to download or verify GeoSite.dat."
+
+    # Replace the old files with the new ones
+    echo "Updating GeoIP.dat..."
+    cp "$TMP_GEOIP_FILE" "$GEOIP_FILE" || handleError "Failed to update GeoIP.dat."
+
+    echo "Updating GeoSite.dat..."
+    cp "$TMP_GEOSITE_FILE" "$GEOSITE_FILE" || handleError "Failed to update GeoSite.dat."
+
+    echo "GeoIP.dat and GeoSite.dat have been updated successfully."
+}
+
+updateMetaCubeXD()
+{
+    # Ensure the ui directory exists
+    mkdir -p "${CLASH_ETC}/ui"
+
+    # Check if the repository already exists and update it, otherwise clone it
+    [ -d "${CLASH_ETC}/ui/.git" ] && \
+    { 
+        echo "Updating existing MetaCubeXD repository..."
+        git -C "${CLASH_ETC}/ui" pull --rebase || handleError "Failed to update MetaCubeXD repository."
+    } || \
+    {
+        echo "Cloning MetaCubeXD repository..."
+        git clone https://github.com/metacubex/metacubexd.git -b gh-pages "${CLASH_ETC}/ui" || handleError "Failed to clone MetaCubeXD repository."
+    }
+
+    echo "MetaCubeXD repository is up to date."
+}
+
+writeConfigYaml()
+{
+    # Check if the YAML configuration file exists and prompt for backup
+    if [ -f "$CLASH_CONFIG" ]; then
+        read -p "Config file exists. Backup it to tmp directory? (Y/n): " BACKUP_YN
+        BACKUP_YN=${BACKUP_YN:-Y}
+        [ "$BACKUP_YN" = "Y" ] && cp "$CLASH_CONFIG" "${CLASH_ETC}/tmp/config.yaml.bak" || echo "Skipping backup."
+    fi
+
+    # Initialize the proxy providers variable
+    local PROXY_PROVIDERS=""
+    local i=1
+
+    while :; do
+        # Prompt for subscription names and URLs
+        local PROXY_NAME
+        local PROXY_URL
+
+        PROXY_NAME="Subsc_${i}"
+        read -p "Name for Proxy provider ${i} (default: $PROXY_NAME): " INPUT_NAME
+        PROXY_NAME=${INPUT_NAME:-$PROXY_NAME}
+
+        read -p "URL for Proxy provider ${i}: " PROXY_URL
+
+        # Add the proxy provider to the PROXY_PROVIDERS variable
+        PROXY_PROVIDERS+=$(cat <<EOF
+  "${PROXY_NAME}":
+    <<: *behavior
+    url: "${PROXY_URL}"
+    path: "./providers/${PROXY_NAME}"
+
+EOF
+        )
+
+        # Prompt for adding another proxy provider
+        read -p "Add another subscription? (y/N): " ADD_ANOTHER
+        [ "${ADD_ANOTHER:-N}" != "Y" ] && break
+        i=$((i + 1))
+    done
+
+    # Define the configuration content
+    local CONFIG_CONTENT=$(cat <<EOF
+################################
+# 预设，便于引用
+behavior: &behavior {type: http, interval: 86400, health-check: {enable: true, url: "http://www.gstatic.com/generate_204", interval: 900}, exclude-filter: "剩余|流量|到期|时间|官网|域名|工单|客服"}
+proxylist: &proxylist {type: select, proxies: [⚙️ 默认, 🎯 直连, ♻️ 自动, 🇺🇸 美国, 🇸🇬 新加坡, 🇯🇵 日本, 🇭🇰 香港, 🇹🇼 台湾], include-all-providers: true}
+
+################################
+# 节点订阅，可填写多个机场
+proxy-providers:
+$PROXY_PROVIDERS
+
+  # You can add more.
+
+################################
+# 内核运行参数，不建议修改
+mixed-port: 7890
+mode: rule
+log-level: silent
+allow-lan: true
+unified-delay: true
+global-client-fingerprint: chrome
+external-controller: 127.0.0.1:9090
+external-ui: "./ui"
+geodata-mode: true
+geo-auto-update: true
+geo-update-interval: 24
+geox-url:
+  geoip: "$GEOIP_URL"
+  geosite: "$GEOSITE_URL"
+sniffer: {enable: true, sniff: {HTTP: {ports: [80, 8080-8880]}, TLS: {ports: [443, 8443]}, QUIC: {ports: [443, 8443]}}}
+tun: {enable: true, stack: gVisor, device: utun0, auto-route: true, auto-detect-interface: true}
+dns: {enable: true, listen: 0.0.0.0:1053, enhanced-mode: fake-ip, fake-ip-range: 28.0.0.1/8, proxy-server-nameserver: [tls://1.0.0.1:853, tls://8.8.8.8:853], nameserver-policy: {geosite:category-ads-all: rcode://success}}
+proxies:
+  - {name: 🎯 直连, type: direct, udp: true}
+  - {name: 🚫 拦截, type: reject, udp: true}
+proxy-groups:
+  - {name: ⚙️ 默认, type: select, proxies: [♻️ 自动, 🎯 直连, 🇺🇸 美国, 🇸🇬 新加坡, 🇯🇵 日本, 🇭🇰 香港, 🇹🇼 台湾], include-all-providers: true}
+  - {name: 🚩 国内, type: select, proxies: [🎯 直连, ⚙️ 默认]}
+  - {name: 🕹️ 游戏, <<: *proxylist}
+  - {name: 📺 影音, <<: *proxylist}
+  - {name: 🤖 OpenAI, <<: *proxylist}
+  - {name: ✈️ 电报, <<: *proxylist}
+  - {name: 🕊️ 推特, <<: *proxylist}
+  - {name: 🔎 谷歌, <<: *proxylist}
+  - {name: 🍎 苹果, <<: *proxylist}
+  - {name: Ⓜ️ 微软, <<: *proxylist}
+  - {name: ♻️ 自动, type: url-test, include-all-providers: true}
+  - {name: 🇺🇸 美国, type: url-test, include-all-providers: true, filter: "(?i)美|美国|US|UnitedStates"}
+  - {name: 🇸🇬 新加坡, type: url-test, include-all-providers: true, filter: "(?i)新|新加坡|SG|Singapore"}
+  - {name: 🇯🇵 日本, type: url-test, include-all-providers: true, filter: "(?i)日|日本|JP|Japan"}
+  - {name: 🇭🇰 香港, type: url-test, include-all-providers: true, filter: "(?i)港|香港|HK|HongKong"}
+  - {name: 🇹🇼 台湾, type: url-test, include-all-providers: true, filter: "(?i)台|台湾|TW|TaiWan"}
+rules:
+  - GEOSITE,private,🎯 直连
+  - GEOSITE,category-ads-all,🚫 拦截
+  - GEOSITE,category-games@cn,🚩 国内
+  - GEOSITE,microsoft@cn,🚩 国内
+  - GEOSITE,apple@cn,🚩 国内
+  - GEOSITE,category-games,🕹️ 游戏
+  - AND,((GEOSITE,category-entertainment),(NOT,((GEOSITE,category-games)))),📺 影音
+  - GEOSITE,openai,🤖 OpenAI
+  - GEOSITE,telegram,✈️ 电报
+  - GEOSITE,twitter,🕊️ 推特
+  - GEOSITE,google,🔎 谷歌
+  - GEOSITE,apple,🍎 苹果
+  - AND,((GEOSITE,microsoft),(NOT,((GEOSITE,github)))),Ⓜ️ 微软
+  - GEOSITE,cn,🚩 国内
+  - GEOIP,private,🎯 直连,no-resolve
+  - GEOIP,telegram,✈️ 电报,no-resolve
+  - GEOIP,cn,🚩 国内,no-resolve
+  - MATCH,⚙️ 默认
+EOF
+    )
+
+    # Write the configuration content to the config file
+    echo "$CONFIG_CONTENT" > "$CLASH_CONFIG" || handleError "Failed to write config.yaml."
+    
+    echo "config.yaml has been written successfully."
+}
+
+createAutostartService()
+{
+    # Create the service file content with improved formatting
+    local SERVICE_CONTENT=$(cat <<EOF
+[Unit]
+Description=mihomo Daemon, Another Clash Kernel.
+After=network.target NetworkManager.service systemd-networkd.service iwd.service
+
+[Service]
+Type=simple
+#User=mihomo
+#Group=mihomo
+LimitNPROC=500
+LimitNOFILE=1000000
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_TIME CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_TIME CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+#Restart=always
+ExecStartPre=/usr/bin/sleep 1s
+ExecStart=$CLASH_BIN -d $CLASH_ETC
+ExecReload=/bin/kill -HUP \$MAINPID
+StandardOutput=file:$CLASH_LOG
+StandardError=file:$CLASH_LOG
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    )
+
+    # Create the service file in $CLASH_ETC
+    echo "$SERVICE_CONTENT" > "$CLASH_ETC/mihomo.service" || handleError "Failed to create service file."
+
+    # Create a symbolic link in the systemd system directory
+    ln -sf "$CLASH_ETC/mihomo.service" /etc/systemd/system/mihomo.service || handleError "Failed to create symbolic link."
+
+    # Reload systemd to recognize the new service
+    systemctl daemon-reload || handleError "Failed to reload systemd daemon."
+
+    # Enable the service to start on boot
+    killClash
+    systemctl enable --now mihomo.service || handleError "Failed to enable mihomo service."
+
+    echo "Mihomo service created successfully and restarted."
+}
+
+# Main script
+case "$1" in
+    -i | --install) installClash ;;
+    -s | --start) startClash ;;
+    -r | --reload) reloadConfig ;;
+    -k | --kill) killClash ;;
+    -l | --log) showClashLogs ;;
+    -u | --update) updateClashKernel ;;
+    -c | --config) writeConfigYaml ;;
+    -g | --geox) updateGeoX ;;
+    -m | --metacubexd) updateMetaCubeXD ;;
+    -a | --autostart) createAutostartService ;;
+    *)
+        echo "Usage: $0 [option]"
+        echo "Options:"
+        echo "  -i | --install  	Install Clash"
+        echo "  -s | --start		Start Clash"
+        echo "  -r | --reload		Reload Config"
+        echo "  -k | --kill		Stop Clash"
+        echo "  -l | --log		Show Clash Logs"
+        echo "  -u | --update		Update Clash Kernel"
+        echo "  -c | --config		Write Config Yaml"
+        echo "  -g | --geox		Update GeoX"
+        echo "  -m | --metacubexd	Update MetaCubeXD"
+        echo "  -a | --autostart	Create Autostart Systemd Service"
+        exit 1
+        ;;
+esac
