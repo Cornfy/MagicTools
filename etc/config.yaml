@@ -1,0 +1,86 @@
+################################
+# 预设，便于引用
+behavior: &behavior {type: http, interval: 86400, health-check: {enable: true, url: "http://www.gstatic.com/generate_204", interval: 900}, exclude-filter: "剩余|流量|到期|时间|官网|域名|工单|客服"}
+proxylist: &proxylist {type: select, proxies: [⚙️ 默认, 🎯 直连, 🚀 代理, 🇺🇸 美国, 🇸🇬 新加坡, 🇯🇵 日本, 🇭🇰 香港, 🇹🇼 台湾], include-all-providers: true}
+
+################################
+# 节点订阅，可填写多个机场
+proxy-providers:
+  "机场1":
+    <<: *behavior
+    url: "请在此处填入订阅链接"
+    path: "./providers/机场1"
+
+  "机场2":
+    <<: *behavior
+    url: "请在此处填入订阅链接"
+    path: "./providers/机场2"
+
+  "机场3":
+    <<: *behavior
+    url: "请在此处填入订阅链接"
+    path: "./providers/机场3"
+
+  # 你可以添加更多
+
+################################
+# 以下为内核参数，不建议修改
+mixed-port: 7890
+mode: rule
+log-level: silent
+allow-lan: true
+unified-delay: true
+global-client-fingerprint: chrome
+external-controller: 127.0.0.1:9090
+external-ui: "./ui"
+external-ui-url: "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip"
+geodata-mode: true
+geo-auto-update: true
+geo-update-interval: 24
+geox-url:
+  geoip: "https://cdn.jsdelivr.net/gh/Cornfy/geoip@release/geoip-asn.dat"
+  geosite: "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
+sniffer: {enable: true, sniff: {HTTP: {ports: [80, 8080-8880]}, TLS: {ports: [443, 8443]}, QUIC: {ports: [443, 8443]}}}
+tun: {enable: true, stack: gVisor, device: utun0, dns-hijack: [udp://0.0.0.0:53, tcp://0.0.0.0:53], auto-route: true, auto-detect-interface: true, auto-redirect: true, strict-route: true}
+dns: {enable: true, listen: 0.0.0.0:1053, enhanced-mode: fake-ip, fake-ip-range: 28.0.0.1/8, respect-rules: true, proxy-server-nameserver: [1.0.0.1, 8.8.8.8, tls://1.0.0.1:853, tls://8.8.8.8:853], nameserver-policy: {geosite:category-ads-all: [rcode://success], geosite:cn: [tls://223.5.5.5:853, tls://119.29.29.29:853], geoip:cn: [tls://223.5.5.5:853, tls://119.29.29.29:853]}}
+proxies:
+  - {name: 🎯 直连, type: direct, udp: true}
+  - {name: 🚫 拦截, type: reject, udp: true}
+proxy-groups:
+  - {name: ⚙️ 默认, type: select, proxies: [🚀 代理, 🎯 直连, 🇺🇸 美国, 🇸🇬 新加坡, 🇯🇵 日本, 🇭🇰 香港, 🇹🇼 台湾], include-all-providers: true}
+  - {name: 🚩 国内, type: select, proxies: [🎯 直连, 🚀 代理]}
+  - {name: 🕹️ 游戏, <<: *proxylist}
+  - {name: 📺 影音, <<: *proxylist}
+  - {name: 🤖 AI聊天, <<: *proxylist}
+  - {name: 🔎 谷歌, <<: *proxylist}
+  - {name: 🍎 苹果, <<: *proxylist}
+  - {name: Ⓜ️ 微软, <<: *proxylist}
+  - {name: ✈️ 电报, <<: *proxylist}
+  - {name: 🕊️ 推特, <<: *proxylist}
+  - {name: 🚀 代理, type: url-test, hidden: true, include-all-providers: true}
+  - {name: 🇺🇸 美国, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)美|美国|US|UnitedStates"}
+  - {name: 🇸🇬 新加坡, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)新|新加坡|SG|Singapore"}
+  - {name: 🇯🇵 日本, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)日|日本|JP|Japan"}
+  - {name: 🇭🇰 香港, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)港|香港|HK|HongKong"}
+  - {name: 🇹🇼 台湾, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)台|台湾|TW|TaiWan"}
+rules:
+  # - PROCESS-NAME,qbittorrent,🎯 直连
+  - GEOSITE,category-ads-all,🚫 拦截
+  - GEOSITE,private,🎯 直连
+  - GEOSITE,category-games@cn,🚩 国内
+  - GEOSITE,microsoft@cn,🚩 国内
+  - GEOSITE,apple@cn,🚩 国内
+  - GEOSITE,category-games,🕹️ 游戏
+  - AND,((GEOSITE,category-entertainment),(NOT,((GEOSITE,category-games)))),📺 影音
+  - GEOSITE,category-ai-chat-!cn,🤖 AI聊天
+  - GEOSITE,google,🔎 谷歌
+  - GEOSITE,apple,🍎 苹果
+  - AND,((GEOSITE,microsoft),(NOT,((GEOSITE,github)))),Ⓜ️ 微软
+  - GEOSITE,telegram,✈️ 电报
+  - GEOSITE,twitter,🕊️ 推特
+  - GEOSITE,geolocation-!cn,🚀 代理
+  - GEOSITE,cn,🚩 国内
+  - GEOIP,private,🎯 直连,no-resolve
+  - GEOIP,telegram,✈️ 电报,no-resolve
+  - GEOIP,cn,🚩 国内,no-resolve
+  - MATCH,⚙️ 默认
