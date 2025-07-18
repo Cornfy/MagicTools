@@ -25,6 +25,8 @@ proxy-providers:
 
 ################################
 # 以下为内核参数，不建议修改
+
+# 全局参数
 mixed-port: 7890
 mode: rule
 log-level: silent
@@ -34,53 +36,137 @@ global-client-fingerprint: chrome
 external-controller: 127.0.0.1:9090
 external-ui: "./ui"
 external-ui-url: "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip"
+
+# GeoX 相关设置
 geodata-mode: true
 geo-auto-update: true
 geo-update-interval: 24
 geox-url:
   geoip: "https://cdn.jsdelivr.net/gh/Cornfy/geoip@release/geoip-asn.dat"
   geosite: "https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat"
-sniffer: {enable: true, sniff: {HTTP: {ports: [80, 8080-8880]}, TLS: {ports: [443, 8443]}, QUIC: {ports: [443, 8443]}}}
-tun: {enable: true, stack: gVisor, device: utun0, dns-hijack: [udp://0.0.0.0:53, tcp://0.0.0.0:53], auto-route: true, auto-detect-interface: true, auto-redirect: true, strict-route: true}
-dns: {enable: true, listen: 0.0.0.0:1053, enhanced-mode: fake-ip, fake-ip-range: 28.0.0.1/8, respect-rules: true, proxy-server-nameserver: [1.0.0.1, 8.8.8.8, tls://1.0.0.1:853, tls://8.8.8.8:853], nameserver-policy: {geosite:category-ads-all: [rcode://success], geosite:cn: [tls://223.5.5.5:853, tls://119.29.29.29:853], geoip:cn: [tls://223.5.5.5:853, tls://119.29.29.29:853]}}
+
+# 域名嗅探
+sniffer:
+  enable: true
+  sniff:
+    HTTP: {ports: [80, 8080-8880]}
+    TLS: {ports: [443, 8443]}
+    QUIC: {ports: [443, 8443]}
+
+# 域名解析
+dns:
+  enable: true
+  prefer-h3: true
+  respect-rules: true
+  listen: 0.0.0.0:1053
+  enhanced-mode: fake-ip
+  fake-ip-range: 28.0.0.1/8
+  default-nameserver:
+    # 用于解析 DNS 服务器域名的 DNS 服务器
+    # 仅限纯 IP，可为加密 DNS
+    - "tls://223.5.5.5#🚩 国内"
+  proxy-server-nameserver:
+    # 仅用于代理节点的域名解析
+    - "tls://223.5.5.5#🚩 国内"
+  nameserver-policy:
+    # 指定特定流量请求使用的 DNS 服务器
+    geosite:category-ads-all: [rcode://success]
+    geosite:cn:
+      - "https://dns.alidns.com/dns-query#🚩 国内"
+      - "https://doh.pub/dns-query#🚩 国内"
+    geoip:cn:
+      - "https://dns.alidns.com/dns-query#🚩 国内"
+      - "https://doh.pub/dns-query#🚩 国内"
+  nameserver:
+    - "https://dns.cloudflare.com/dns-query#📡 DNS"
+    - "https://dns.google/dns-query#📡 DNS"
+
+# 虚拟网卡
+tun:
+  enable: true
+  stack: gVisor
+  device: utun0
+  dns-hijack:
+   - udp://0.0.0.0:53
+   - tcp://0.0.0.0:53
+  auto-route: true
+  auto-detect-interface: true
+  auto-redirect: true
+  strict-route: true
+
+# 代理节点
 proxies:
   - {name: 🎯 直连, type: direct, udp: true}
   - {name: 🚫 拦截, type: reject, udp: true}
+  - {name: dns-out, type: dns}
+
+# 代理组
 proxy-groups:
   - {name: ⚙️ 默认, type: select, proxies: [🚀 代理, 🎯 直连, 🇺🇸 美国, 🇸🇬 新加坡, 🇯🇵 日本, 🇭🇰 香港, 🇹🇼 台湾], include-all-providers: true}
-  - {name: 🚩 国内, type: select, proxies: [🎯 直连, 🚀 代理]}
+  - {name: 🚩 国内, type: select, proxies: [🎯 直连, ⚙️ 默认]}
   - {name: 🕹️ 游戏, <<: *proxylist}
   - {name: 📺 影音, <<: *proxylist}
-  - {name: 🤖 AI聊天, <<: *proxylist}
+  - {name: 🤖 AI, <<: *proxylist}
   - {name: 🔎 谷歌, <<: *proxylist}
   - {name: 🍎 苹果, <<: *proxylist}
   - {name: Ⓜ️ 微软, <<: *proxylist}
   - {name: ✈️ 电报, <<: *proxylist}
   - {name: 🕊️ 推特, <<: *proxylist}
+  - {name: 📡 DNS, type: select, hidden: true, proxies: [🇺🇸 美国]}
   - {name: 🚀 代理, type: url-test, hidden: true, include-all-providers: true}
   - {name: 🇺🇸 美国, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)美|美国|US|UnitedStates"}
   - {name: 🇸🇬 新加坡, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)新|新加坡|SG|Singapore"}
   - {name: 🇯🇵 日本, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)日|日本|JP|Japan"}
   - {name: 🇭🇰 香港, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)港|香港|HK|HongKong"}
   - {name: 🇹🇼 台湾, type: url-test, hidden: true, include-all-providers: true, filter: "(?i)台|台湾|TW|TaiWan"}
+
+# 分流规则，越靠前优先级越高
 rules:
-  # - PROCESS-NAME,qbittorrent,🎯 直连
-  - GEOSITE,category-ads-all,🚫 拦截
+  # 匹配需直连的程序
+  - PROCESS-NAME-REGEX,(?i)ssh,🎯 直连
+  - PROCESS-NAME-REGEX,(?i)bittorrent,🎯 直连
+  - PROCESS-NAME-REGEX,(?i)tailscale,🎯 直连
+
+  # 匹配 DNS，交给内部 dns 模块处理
+  - AND,((DST-PORT,53),(NETWORK,UDP)),dns-out
+  - AND,((DST-PORT,53/853),(NETWORK,TCP)),dns-out
+  - DOMAIN-SUFFIX,dns.cloudflare.com,dns-out
+  - DOMAIN-SUFFIX,dns.google.com,dns-out
+  - DOMAIN-SUFFIX,dns.alidns.com,dns-out
+  - DOMAIN-SUFFIX,doh.pub,dns-out
+    
+  # 匹配私有域名，走直连
   - GEOSITE,private,🎯 直连
+
+  # 匹配广告域名，拦截
+  - GEOSITE,category-ads-all,🚫 拦截
+
+  # 匹配国际服务商的国内域名，走国内代理组
   - GEOSITE,category-games@cn,🚩 国内
   - GEOSITE,microsoft@cn,🚩 国内
   - GEOSITE,apple@cn,🚩 国内
+
+  # 匹配国际服务商的域名，走相应代理组
   - GEOSITE,category-games,🕹️ 游戏
   - AND,((GEOSITE,category-entertainment),(NOT,((GEOSITE,category-games)))),📺 影音
-  - GEOSITE,category-ai-chat-!cn,🤖 AI聊天
+  - GEOSITE,category-ai-!cn,🤖 AI
   - GEOSITE,google,🔎 谷歌
   - GEOSITE,apple,🍎 苹果
   - AND,((GEOSITE,microsoft),(NOT,((GEOSITE,github)))),Ⓜ️ 微软
   - GEOSITE,telegram,✈️ 电报
   - GEOSITE,twitter,🕊️ 推特
-  - GEOSITE,geolocation-!cn,🚀 代理
+
+  # 匹配国内域名，走国内代理组
   - GEOSITE,cn,🚩 国内
+
+  # 匹配私有 IP ，走直连，不解析域名
   - GEOIP,private,🎯 直连,no-resolve
+
+  # 匹配国际服务商的 IP ，走相应代理组，不解析域名
   - GEOIP,telegram,✈️ 电报,no-resolve
+
+  # 匹配国内 IP ，走国内代理组，不解析域名
   - GEOIP,cn,🚩 国内,no-resolve
+
+  # 最终兜底规则，匹配所以未被规则分流的流量，走默认组
   - MATCH,⚙️ 默认
