@@ -45,7 +45,7 @@ detectSystemInfo() {
 			AARCH=$( [ "$UNAME_M" = "armv7l" ] && echo "armv7" || echo "arm64-v8" )
 			;;
 		linux)
-			AARCH=$( [ "$UNAME_M" = "x86_64" ] && echo "amd64-compatible" || echo "386" )
+			AARCH=$( [ "$UNAME_M" = "x86_64" ] && echo "amd64-v1" || echo "386" )
 			;;
 		*)
 			handleError "Unsupported architecture: $UNAME_M"
